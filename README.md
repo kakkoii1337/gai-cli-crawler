@@ -6,7 +6,7 @@ homepage: https://github.com/kakkoii1337/gai-cli-crawler
 
 # crawler
 
-CLI tool for crawling web pages and extracting links. Builds a `LinkNode` tree (url, title, children) using patchright and cheerio.
+CLI tool for crawling web pages and extracting links. Builds a `LinkNode` tree (url, title, children) using patchright and cheerio, with optional job persistence.
 
 ## Installation
 
@@ -23,37 +23,46 @@ npx gai-cli-crawler "https://example.com"
 ## Usage
 
 ```bash
-crawler <url> [options]
+crawler <url> [options]                   Quick crawl, output to stdout
+crawler run <url> [options]               Crawl with job persistence
+crawler list [--jobs-dir=<dir>]           List all past jobs
+crawler status <job-id>                   Show job details
+crawler result <job-id> [--format=...]    Print result of a completed job
+crawler clear [--jobs-dir=<dir>]          Delete all jobs
 ```
 
-### Arguments
-
-- `url` - Seed URL to start crawling (required)
-
-### Options
+### Crawl Options
 
 - `--depth=N` - Crawl depth (default: 1)
-- `--max-links=N` - Max links to follow per page (default: 10)
+- `--max-links=N` - Max links per page (default: 10)
 - `--same-domain` - Only follow links on the same domain
 - `--output=<file>` - Save output to file
-- `--format=text|json` - Output format: flat text list or JSON tree (default: text)
+- `--format=text|json` - Output format (default: text)
 - `--headless=false` - Headless browser mode (default: true)
+- `--jobs-dir=<dir>` - Jobs directory (default: `$TMPDIR/gai-cli-crawler`)
 - `--help, -h` - Show help message
 
 ### Examples
 
 ```bash
-# Crawl and list links (depth 1)
+# Quick crawl to stdout
 crawler "https://example.com"
 
-# Crawl 2 levels deep, limit 5 links per page
-crawler "https://example.com" --depth=2 --max-links=5
+# Crawl with job persistence
+crawler run "https://example.com" --depth=2 --same-domain
 
-# Only follow same-domain links, output as JSON
-crawler "https://example.com" --same-domain --format=json
+# List all past jobs
+crawler list
 
-# Save results to file
-crawler "https://example.com" --output=links.txt
+# Show result of a past job
+crawler result <job-id>
+crawler result <job-id> --format=json
+
+# Show job details and status
+crawler status <job-id>
+
+# Delete all jobs
+crawler clear
 ```
 
 ## Output Format
@@ -82,6 +91,19 @@ crawler "https://example.com" --output=links.txt
     }
   ]
 }
+```
+
+## Job Lifecycle
+
+`crawler run` tracks each crawl as a job through: `PENDING → PROCESSING → COMPLETED / FAILED`
+
+Jobs are stored as JSON files under `--jobs-dir`:
+```
+$TMPDIR/gai-cli-crawler/
+  pending/
+  processing/
+  completed/
+  failed/
 ```
 
 ## Notes

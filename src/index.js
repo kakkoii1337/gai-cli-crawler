@@ -2,96 +2,125 @@
 /**
  * gai-cli-crawler - CLI tool for crawling web pages and extracting links
  *
- * Usage: crawler <url> [--depth=1] [--max-links=10] [--same-domain] [--output=file] [--format=text|json]
+ * Usage:
+ *   crawler <url> [options]                  Quick crawl, no persistence
+ *   crawler run <url> [options]              Crawl with job persistence
+ *   crawler list [--jobs-dir=<dir>]          List all past jobs
+ *   crawler status <job-id>                  Show job details
+ *   crawler result <job-id> [--format=...]   Print result of a completed job
+ *   crawler clear [--jobs-dir=<dir>]         Delete all jobs
  */
 
 import * as cheerio from "cheerio";
 import patchright from "patchright";
-import { writeFileSync } from "fs";
+import {
+    writeFileSync,
+    readFileSync,
+    existsSync,
+    mkdirSync,
+    readdirSync,
+    unlinkSync,
+} from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import { randomUUID } from "crypto";
 
 const DEFAULT_DEPTH = 1;
 const DEFAULT_MAX_LINKS = 10;
 const DEFAULT_TIMEOUT = 30000;
+const DEFAULT_JOBS_DIR = join(tmpdir(), "gai-cli-crawler");
 
-function parseArgs() {
-    const args = process.argv.slice(2);
-    const options = {
-        url: "",
-        depth: DEFAULT_DEPTH,
-        maxLinks: DEFAULT_MAX_LINKS,
-        sameDomain: false,
-        output: null,
-        format: "text",
-        headless: true,
+// ─── Job Manager ─────────────────────────────────────────────────────────────
+
+function initJobDirs(jobsDir) {
+    for (const sub of ["pending", "processing", "completed", "failed"]) {
+        const dir = join(jobsDir, sub);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    }
+}
+
+function createJob(jobsDir, rootUrl, maxDepth, maxLinks, sameDomain) {
+    const jobId = randomUUID();
+    const job = {
+        job_id: jobId,
+        root_url: rootUrl,
+        max_depth: maxDepth,
+        max_links: maxLinks,
+        same_domain: sameDomain,
+        status: "PENDING",
+        result: null,
+        error: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
     };
+    writeFileSync(join(jobsDir, "pending", `${jobId}.json`), JSON.stringify(job, null, 2));
+    return job;
+}
 
-    for (const arg of args) {
-        if (arg.startsWith("--depth=")) {
-            options.depth = parseInt(arg.split("=")[1], 10);
-        } else if (arg.startsWith("--max-links=")) {
-            options.maxLinks = parseInt(arg.split("=")[1], 10);
-        } else if (arg === "--same-domain") {
-            options.sameDomain = true;
-        } else if (arg.startsWith("--output=")) {
-            options.output = arg.split("=")[1];
-        } else if (arg.startsWith("--format=")) {
-            options.format = arg.split("=")[1];
-        } else if (arg.startsWith("--headless=")) {
-            options.headless = arg.split("=")[1] !== "false";
-        } else if (arg === "--help" || arg === "-h") {
-            printHelp();
-            process.exit(0);
-        } else if (!arg.startsWith("--")) {
-            options.url = arg;
+function moveToProcessing(jobsDir, jobId) {
+    const src = join(jobsDir, "pending", `${jobId}.json`);
+    const dest = join(jobsDir, "processing", `${jobId}.json`);
+    const job = JSON.parse(readFileSync(src, "utf-8"));
+    job.status = "PROCESSING";
+    job.updated_at = new Date().toISOString();
+    unlinkSync(src);
+    writeFileSync(dest, JSON.stringify(job, null, 2));
+    return job;
+}
+
+function completeJob(jobsDir, jobId, result) {
+    const src = join(jobsDir, "processing", `${jobId}.json`);
+    const dest = join(jobsDir, "completed", `${jobId}.json`);
+    const job = JSON.parse(readFileSync(src, "utf-8"));
+    job.status = "COMPLETED";
+    job.result = result;
+    job.updated_at = new Date().toISOString();
+    unlinkSync(src);
+    writeFileSync(dest, JSON.stringify(job, null, 2));
+    return job;
+}
+
+function failJob(jobsDir, jobId, error) {
+    const src = join(jobsDir, "processing", `${jobId}.json`);
+    const dest = join(jobsDir, "failed", `${jobId}.json`);
+    const job = JSON.parse(readFileSync(src, "utf-8"));
+    job.status = "FAILED";
+    job.error = error;
+    job.updated_at = new Date().toISOString();
+    unlinkSync(src);
+    writeFileSync(dest, JSON.stringify(job, null, 2));
+    return job;
+}
+
+function getJob(jobsDir, jobId) {
+    for (const sub of ["pending", "processing", "completed", "failed"]) {
+        const p = join(jobsDir, sub, `${jobId}.json`);
+        if (existsSync(p)) return JSON.parse(readFileSync(p, "utf-8"));
+    }
+    return null;
+}
+
+function listAllJobs(jobsDir) {
+    const jobs = [];
+    for (const sub of ["pending", "processing", "completed", "failed"]) {
+        const dir = join(jobsDir, sub);
+        if (!existsSync(dir)) continue;
+        for (const f of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
+            jobs.push(JSON.parse(readFileSync(join(dir, f), "utf-8")));
         }
     }
-
-    if (!options.url) {
-        console.error("Error: URL is required");
-        printHelp();
-        process.exit(1);
-    }
-
-    try {
-        new URL(options.url);
-    } catch {
-        console.error("Error: Invalid URL");
-        process.exit(1);
-    }
-
-    if (!["text", "json"].includes(options.format)) {
-        console.error("Error: --format must be 'text' or 'json'");
-        process.exit(1);
-    }
-
-    return options;
+    return jobs.sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-function printHelp() {
-    console.log(`
-crawler - CLI tool for crawling web pages and extracting links
-
-Usage: crawler <url> [options]
-
-Arguments:
-  url                  Seed URL to start crawling (required)
-
-Options:
-  --depth=N            Crawl depth (default: ${DEFAULT_DEPTH})
-  --max-links=N        Max links to follow per page (default: ${DEFAULT_MAX_LINKS})
-  --same-domain        Only follow links on the same domain
-  --output=<file>      Save output to file
-  --format=text|json   Output format: flat text list or JSON tree (default: text)
-  --headless=false     Headless browser mode (default: true)
-  --help, -h           Show this help message
-
-Examples:
-  crawler "https://example.com"
-  crawler "https://example.com" --depth=2 --max-links=5
-  crawler "https://example.com" --same-domain --format=json
-  crawler "https://example.com" --output=links.txt
-`);
+function clearAllJobs(jobsDir) {
+    for (const sub of ["pending", "processing", "completed", "failed"]) {
+        const dir = join(jobsDir, sub);
+        if (!existsSync(dir)) continue;
+        for (const f of readdirSync(dir)) unlinkSync(join(dir, f));
+    }
 }
+
+// ─── Crawler ─────────────────────────────────────────────────────────────────
 
 async function fetchHtml(url, headless, timeout = DEFAULT_TIMEOUT) {
     const browser = await patchright.chromium.launch({
@@ -172,10 +201,8 @@ async function crawl(url, depth, maxLinks, sameDomain, headless, visited = new S
     const node = { url, title, children: [] };
 
     if (depth <= 1) {
-        // Leaf level: list links without fetching them
         node.children = links.map((l) => ({ url: l.url, title: l.title, children: [] }));
     } else {
-        // Recurse into each child
         for (const link of links) {
             const child = await crawl(link.url, depth - 1, maxLinks, sameDomain, headless, visited);
             if (!child.title || child.title === link.url) child.title = link.title;
@@ -194,36 +221,195 @@ function flattenLinks(node, result = {}) {
     return result;
 }
 
-function formatText(flat) {
+function formatOutput(root, format) {
+    if (format === "json") return JSON.stringify(root, null, 2);
+    const flat = flattenLinks(root);
     return Object.entries(flat)
         .map(([url, title], i) => `${i + 1}. ${title}\n   ${url}`)
         .join("\n\n");
 }
 
-async function main() {
-    const options = parseArgs();
+// ─── CLI ─────────────────────────────────────────────────────────────────────
 
-    const root = await crawl(
-        options.url,
-        options.depth,
-        options.maxLinks,
-        options.sameDomain,
-        options.headless
-    );
+function parseFlags(args) {
+    const flags = {
+        depth: DEFAULT_DEPTH,
+        maxLinks: DEFAULT_MAX_LINKS,
+        sameDomain: false,
+        output: null,
+        format: "text",
+        headless: true,
+        jobsDir: DEFAULT_JOBS_DIR,
+    };
 
-    let output;
-    if (options.format === "json") {
-        output = JSON.stringify(root, null, 2);
-    } else {
-        const flat = flattenLinks(root);
-        output = formatText(flat);
+    for (const arg of args) {
+        if (arg.startsWith("--depth=")) flags.depth = parseInt(arg.split("=")[1], 10);
+        else if (arg.startsWith("--max-links=")) flags.maxLinks = parseInt(arg.split("=")[1], 10);
+        else if (arg === "--same-domain") flags.sameDomain = true;
+        else if (arg.startsWith("--output=")) flags.output = arg.split("=")[1];
+        else if (arg.startsWith("--format=")) flags.format = arg.split("=")[1];
+        else if (arg.startsWith("--headless=")) flags.headless = arg.split("=")[1] !== "false";
+        else if (arg.startsWith("--jobs-dir=")) flags.jobsDir = arg.split("=")[1];
     }
 
-    if (options.output) {
-        writeFileSync(options.output, output, "utf-8");
-        console.error(`Output saved to: ${options.output}`);
+    return flags;
+}
+
+function printHelp() {
+    console.log(`
+crawler - CLI tool for crawling web pages and extracting links
+
+Usage:
+  crawler <url> [options]                   Quick crawl, output to stdout
+  crawler run <url> [options]               Crawl with job persistence
+  crawler list [--jobs-dir=<dir>]           List all past jobs
+  crawler status <job-id>                   Show job details
+  crawler result <job-id> [--format=...]    Print result of a completed job
+  crawler clear [--jobs-dir=<dir>]          Delete all jobs
+
+Crawl Options:
+  --depth=N            Crawl depth (default: ${DEFAULT_DEPTH})
+  --max-links=N        Max links per page (default: ${DEFAULT_MAX_LINKS})
+  --same-domain        Only follow links on the same domain
+  --output=<file>      Save output to file
+  --format=text|json   Output format (default: text)
+  --headless=false     Headless browser mode (default: true)
+  --jobs-dir=<dir>     Jobs directory (default: ${DEFAULT_JOBS_DIR})
+  --help, -h           Show this help message
+
+Examples:
+  crawler "https://example.com"
+  crawler run "https://example.com" --depth=2 --same-domain
+  crawler list
+  crawler result <job-id> --format=json
+  crawler clear
+`);
+}
+
+async function cmdCrawl(args) {
+    const url = args.find((a) => !a.startsWith("--"));
+    const flags = parseFlags(args);
+
+    if (!url) {
+        console.error("Error: URL is required");
+        process.exit(1);
+    }
+    try { new URL(url); } catch { console.error("Error: Invalid URL"); process.exit(1); }
+
+    const root = await crawl(url, flags.depth, flags.maxLinks, flags.sameDomain, flags.headless);
+    const output = formatOutput(root, flags.format);
+
+    if (flags.output) {
+        writeFileSync(flags.output, output, "utf-8");
+        console.error(`Output saved to: ${flags.output}`);
     } else {
         console.log(output);
+    }
+}
+
+async function cmdRun(args) {
+    const url = args.find((a) => !a.startsWith("--"));
+    const flags = parseFlags(args);
+
+    if (!url) {
+        console.error("Error: URL is required");
+        process.exit(1);
+    }
+    try { new URL(url); } catch { console.error("Error: Invalid URL"); process.exit(1); }
+
+    initJobDirs(flags.jobsDir);
+    const job = createJob(flags.jobsDir, url, flags.depth, flags.maxLinks, flags.sameDomain);
+    console.error(`Job created: ${job.job_id}`);
+
+    moveToProcessing(flags.jobsDir, job.job_id);
+
+    let root;
+    try {
+        root = await crawl(url, flags.depth, flags.maxLinks, flags.sameDomain, flags.headless);
+        completeJob(flags.jobsDir, job.job_id, root);
+        console.error(`Job completed: ${job.job_id}`);
+    } catch (e) {
+        failJob(flags.jobsDir, job.job_id, e.message);
+        console.error(`Job failed: ${e.message}`);
+        process.exit(1);
+    }
+
+    const output = formatOutput(root, flags.format);
+
+    if (flags.output) {
+        writeFileSync(flags.output, output, "utf-8");
+        console.error(`Output saved to: ${flags.output}`);
+    } else {
+        console.log(output);
+    }
+}
+
+function cmdList(args) {
+    const flags = parseFlags(args);
+    initJobDirs(flags.jobsDir);
+    const jobs = listAllJobs(flags.jobsDir);
+
+    if (jobs.length === 0) {
+        console.log("No jobs found.");
+        return;
+    }
+
+    console.log(`${"JOB ID".padEnd(38)} ${"STATUS".padEnd(12)} ${"DATE".padEnd(24)} URL`);
+    console.log("-".repeat(100));
+    for (const j of jobs) {
+        const date = j.created_at.slice(0, 19).replace("T", " ");
+        console.log(`${j.job_id.padEnd(38)} ${j.status.padEnd(12)} ${date.padEnd(24)} ${j.root_url}`);
+    }
+}
+
+function cmdStatus(args) {
+    const jobId = args.find((a) => !a.startsWith("--"));
+    const flags = parseFlags(args);
+
+    if (!jobId) { console.error("Error: job-id is required"); process.exit(1); }
+
+    const job = getJob(flags.jobsDir, jobId);
+    if (!job) { console.error(`Job not found: ${jobId}`); process.exit(1); }
+
+    console.log(JSON.stringify({ ...job, result: job.result ? "(present)" : null }, null, 2));
+}
+
+function cmdResult(args) {
+    const jobId = args.find((a) => !a.startsWith("--"));
+    const flags = parseFlags(args);
+
+    if (!jobId) { console.error("Error: job-id is required"); process.exit(1); }
+
+    const job = getJob(flags.jobsDir, jobId);
+    if (!job) { console.error(`Job not found: ${jobId}`); process.exit(1); }
+    if (job.status !== "COMPLETED") { console.error(`Job is ${job.status}, not COMPLETED`); process.exit(1); }
+
+    console.log(formatOutput(job.result, flags.format));
+}
+
+function cmdClear(args) {
+    const flags = parseFlags(args);
+    clearAllJobs(flags.jobsDir);
+    console.log("All jobs cleared.");
+}
+
+async function main() {
+    const [, , subcmd, ...rest] = process.argv;
+
+    if (!subcmd || subcmd === "--help" || subcmd === "-h") {
+        printHelp();
+        process.exit(0);
+    }
+
+    switch (subcmd) {
+        case "run":    await cmdRun(rest); break;
+        case "list":   cmdList(rest); break;
+        case "status": cmdStatus(rest); break;
+        case "result": cmdResult(rest); break;
+        case "clear":  cmdClear(rest); break;
+        default:
+            // Treat as quick crawl: crawler <url> [options]
+            await cmdCrawl([subcmd, ...rest]);
     }
 }
 
