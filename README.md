@@ -25,6 +25,8 @@ npx gai-cli-crawler "https://example.com"
 ```bash
 crawler <url> [options]                   Quick crawl, output to stdout
 crawler run <url> [options]               Crawl with job persistence
+crawler rerun <job-id> [options]          Rerun a failed/cancelled job
+crawler cancel <job-id>                   Cancel a running job
 crawler list [--jobs-dir=<dir>]           List all past jobs
 crawler status <job-id>                   Show job details
 crawler result <job-id> [--format=...]    Print result of a completed job
@@ -50,6 +52,12 @@ crawler "https://example.com"
 
 # Crawl with job persistence
 crawler run "https://example.com" --depth=2 --same-domain
+
+# Cancel a running job (from another terminal)
+crawler cancel <job-id>
+
+# Rerun a failed or cancelled job
+crawler rerun <job-id>
 
 # List all past jobs
 crawler list
@@ -95,7 +103,9 @@ crawler clear
 
 ## Job Lifecycle
 
-`crawler run` tracks each crawl as a job through: `PENDING → PROCESSING → COMPLETED / FAILED`
+`crawler run` tracks each crawl as a job through: `PENDING → SCRAPING → COMPLETED / CANCELLED / FAILED`
+
+Progress is reported as a percentage during `SCRAPING` and stored in `result.progress`.
 
 Jobs are stored as JSON files under `--jobs-dir`:
 ```
@@ -103,7 +113,8 @@ $TMPDIR/gai-cli-crawler/
   pending/
   processing/
   completed/
-  failed/
+  failed/     (includes CANCELLED jobs)
+  cancel/     (flag files for in-flight cancellation)
 ```
 
 ## Notes
