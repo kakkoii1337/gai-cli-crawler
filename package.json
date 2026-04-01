@@ -1,6 +1,6 @@
 {
     "name": "gai-cli-crawler",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "CLI tool for crawling web pages and extracting links",
     "type": "module",
     "main": "src/index.js",
