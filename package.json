@@ -1,0 +1,39 @@
+{
+    "name": "gai-cli-crawler",
+    "version": "1.0.0",
+    "description": "CLI tool for crawling web pages and extracting links",
+    "type": "module",
+    "main": "src/index.js",
+    "bin": {
+        "crawler": "src/index.js"
+    },
+    "scripts": {
+        "start": "node src/index.js"
+    },
+    "keywords": [
+        "cli",
+        "crawler",
+        "web",
+        "links",
+        "scraper",
+        "patchright",
+        "cheerio"
+    ],
+    "author": "kakkoii1337 <kakkoii1337@gmail.com>",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/kakkoii1337/gai-cli-crawler.git"
+    },
+    "bugs": {
+        "url": "https://github.com/kakkoii1337/gai-cli-crawler/issues"
+    },
+    "homepage": "https://github.com/kakkoii1337/gai-cli-crawler#readme",
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "dependencies": {
+        "cheerio": "^1.0.0",
+        "patchright": "^1.58.2"
+    }
+}
